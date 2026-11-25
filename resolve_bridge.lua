@@ -889,10 +889,59 @@ function OPS.add_title_cards(a)
       out[#out + 1] = item_info(placed[1], "video", a.track_index)
     end
   end)
-  p:SetCurrentTimeline(target)
+  for _ = 1, 6 do  -- Resolve may switch to the last card's timeline again a moment later
+    p:SetCurrentTimeline(target)
+    sleep(0.3)
+    if p:GetCurrentTimeline():GetName() == target:GetName() then break end
+  end
   mp:SetCurrentFolder(previous)
   if not ok then return { placed = out, error = tostring(err) } end
   return { placed = out }
+end
+
+-- Saves the open project first: Resolve closes it when it makes a new one.
+function OPS.create_project(a)
+  local pm = resolve:GetProjectManager()
+  if not pm:SaveProject() then error("could not save the current project, so no new project was made", 0) end
+  local p = pm:CreateProject(a.name)
+  if not p then error("Resolve refused to create project " .. tostring(a.name) .. " (name already used?)", 0) end
+  local applied = {}
+  for k, v in pairs(a.settings or {}) do applied[k] = p:SetSetting(k, tostring(v)) and true or false end
+  return { name = p:GetName(), settings = applied }
+end
+
+function OPS.import_timeline(a)
+  local p = proj()
+  local t = pool():ImportTimelineFromFile(a.path, { timelineName = a.name, importSourceClips = true })
+  if not t then error("Resolve could not import " .. tostring(a.path), 0) end
+  p:SetCurrentTimeline(t)
+  return { name = t:GetName() }
+end
+
+-- Remove caption cards made by add_title_cards: the placed item and its small timeline, only from the named bin.
+function OPS.remove_title_cards(a)
+  local folder
+  for _, f in ipairs(each(pool():GetRootFolder():GetSubFolderList())) do if f:GetName() == a.folder then folder = f end end
+  if not folder then error("bin not found: " .. tostring(a.folder), 0) end
+  local inbin = {}
+  for _, c in ipairs(each(folder:GetClipList())) do inbin[c:GetMediaId()] = c end
+  local items, timelines = {}, {}
+  for _, id in ipairs(a.item_ids) do
+    local it = find_item(id)
+    local mp = try(it, "GetMediaPoolItem")
+    local inner = mp and inbin[mp:GetMediaId()] and try(mp, "GetTimeline")
+    if not inner then error("item " .. id .. " is not a caption card from bin " .. a.folder, 0) end
+    items[#items + 1], timelines[#timelines + 1] = it, inner
+  end
+  local ok = tl():DeleteClips(items, false)
+  return { items = ok and #items or 0, timelines = (ok and pool():DeleteTimelines(timelines)) and #timelines or 0 }
+end
+
+-- Sets timeline settings such as timelineResolutionWidth/Height; reports what Resolve accepted.
+function OPS.set_timeline_settings(a)
+  local t, out = tl(), {}
+  for k, v in pairs(a.settings or {}) do out[k] = t:SetSetting(k, tostring(v)) and true or false end
+  return { applied = out, width = t:GetSetting("timelineResolutionWidth"), height = t:GetSetting("timelineResolutionHeight") }
 end
 
 function OPS.reload_bridge()

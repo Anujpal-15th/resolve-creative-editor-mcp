@@ -217,6 +217,16 @@ class Replace(Base):
         self.assertIn("outside", E.run("trim_item", {"item_id": "a", "head_frames": -5})["reason"])
 
 
+class Placing(Base):
+    def test_overlap_inside_one_request_is_refused(self):
+        f = self.use(FakeResolve([]))
+        r = E.run("place_clips", {"clips": [{"clip": "c1", "start_frame": 0, "end_frame": 40, "record": 1000, "media_type": 2},
+                                            {"clip": "c1", "start_frame": 0, "end_frame": 40, "record": 1030, "media_type": 2}],
+                                  "confirm": True})
+        self.assertEqual(r["_operation"]["status"], "blocked")
+        self.assertNotIn("append_clips", f.calls)
+
+
 class Captions(Base):
     def test_split_and_no_overlap(self):
         segs = E.split_segments([{"start": 0, "end": 4, "text": "one two three four five six seven eight nine ten"},
@@ -224,6 +234,12 @@ class Captions(Base):
         self.assertTrue(all(len(s["text"]) <= 20 for s in segs))
         for a, b in zip(segs, segs[1:]):
             self.assertLessEqual(a["end"], b["start"])
+
+    def test_no_orphan_words(self):
+        segs = E.split_segments([{"start": 0, "end": 3, "text": "Then comes the part I have been waiting for."}], 42)
+        self.assertEqual(" ".join(x["text"] for x in segs), "Then comes the part I have been waiting for.")
+        self.assertTrue(all(len(x["text"]) >= 12 for x in segs), segs)  # no one-word orphan like "for."
+        self.assertTrue(all(len(x["text"]) <= 42 for x in segs))
 
     def test_cards_cap_at_five_seconds(self):
         cards = E.caption_cards([{"start": 0, "end": 7, "text": "long"}], 30, 1000, "T")
