@@ -355,6 +355,11 @@ def place_clips(a):
             hit = _collides(kind, track, record, record + last - first)
             if hit:
                 return _blocked(f"{clip['name']} would overwrite {hit['name']} on {kind[0].upper()}{track} at {_tc(hit['start'])}")
+            for p in plan:  # clips in the same request must not overlap each other either
+                p_kinds = {1: ["video"], 2: ["audio"]}.get(p["media_type"], ["video", "audio"])
+                if (kind in p_kinds and p["track_index"] == track and p["record_frame"] < record + last - first
+                        and record < p["record_frame"] + p["frames"]):
+                    return _blocked(f"{clip['name']} overlaps {p['name']} in this same request at {_tc(record)}")
         plan.append({"clip": clip["id"], "name": clip["name"], "start_frame": first, "end_frame": last,
                      "record_frame": record, "track_index": track, "media_type": spec.get("media_type"),
                      "at": _tc(record), "frames": last - first})
@@ -694,21 +699,28 @@ def add_audio_markers(a):
 
 
 # ---------- captions ----------
+def _balanced_lines(text, max_chars):
+    """Split at the word boundary nearest the middle (a comma wins), recursing until every line fits."""
+    words = text.split()
+    if len(text) <= max_chars or len(words) < 2:
+        return [text]
+    best = None
+    for i in range(1, len(words)):
+        left, right = " ".join(words[:i]), " ".join(words[i:])
+        score = max(len(left), len(right)) - (6 if left.endswith(",") else 0)
+        if best is None or score < best[0]:
+            best = (score, left, right)
+    return _balanced_lines(best[1], max_chars) + _balanced_lines(best[2], max_chars)
+
+
 def split_segments(segments, max_chars=42):
-    """Split long lines at word boundaries, sharing time by length, and stop lines overlapping."""
+    """One line per caption: long lines are split evenly, time is shared by length, and overlaps are trimmed."""
     out = []
     for s in segments:
-        words, text = s["text"].split(), s["text"].strip()
+        text = " ".join(s["text"].split())
         if not text:
             continue
-        lines, line = [], ""
-        for w in words:
-            if line and len(line) + 1 + len(w) > max_chars:
-                lines.append(line)
-                line = w
-            else:
-                line = f"{line} {w}".strip()
-        lines.append(line)
+        lines = _balanced_lines(text, max_chars)
         total, t = sum(len(x) for x in lines), float(s["start"])
         for x in lines:
             end = t + (float(s["end"]) - float(s["start"])) * len(x) / total
